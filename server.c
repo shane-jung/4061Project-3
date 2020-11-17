@@ -49,7 +49,8 @@ int retrieve_idx = 0;
 FILE* logfile;
 cache_entry_t* cache; 
 int cache_size = 0; 
-pthread_mutex_t lock; 
+pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* ******************** Dynamic Pool Code  [Extra Credit A] **********************/
 // Extra Credit: This function implements the policy to change the worker thread pool dynamically
@@ -150,6 +151,10 @@ void * dispatch(void *arg) {
     if(get_request(fd, filename)){
        continue;
     }
+    
+    // Set lock
+    pthread_mutex_lock(&queue_lock);
+    
     // Add the request into the queue
 
     request_t req; 
@@ -157,6 +162,9 @@ void * dispatch(void *arg) {
     req.request = filename;
     queue[insert_idx] = req;
     insert_idx++; 
+    
+    //Unlock
+    pthread_mutex_unlock(&queue_lock);
    }
    return NULL;
 }
@@ -173,14 +181,20 @@ void * worker(void * arg) {
       //fprintf(logfile, "Handled all requests\n");
       continue;  //if we've handled all requests
     }
-    
-    // Get the request from the queue
 
     //set lock
+    
+    pthread_mutex_lock(&queue_lock);
+    
+    // Get the request from the queue
+    
     request_t req = queue[retrieve_idx];
     retrieve_idx++; 
     num_requests++;
+    
     //unlock
+    
+    pthread_mutex_unlock(&queue_lock);
 
     // Get the data from the disk or the cache (extra credit B)
 
@@ -190,6 +204,9 @@ void * worker(void * arg) {
     stat(path, &st);
     char* contents = malloc(st.st_size);
     int numbytes = readFromDisk(path, contents, st.st_size);
+    
+    //set lock
+    pthread_mutex_lock(&log_lock);
 
     // Log the request into the file and terminal
 
@@ -199,11 +216,15 @@ void * worker(void * arg) {
       return_error(req.fd, error);
       fprintf(logfile, "[%s]", error);
       fprintf(logfile, "[MISS]\n");
-      return 0;
+      
     } else {
       fprintf(logfile, "[%d]", numbytes);
+      fprintf(logfile, "[MISS]\n");
     }
-    fprintf(logfile, "[MISS]\n");
+    
+    
+    //Unlock
+    pthread_mutex_unlock(&log_lock);
 
     // return the result
 
