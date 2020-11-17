@@ -32,20 +32,24 @@ typedef struct request_queue {
 } request_t;
 
 typedef struct cache_entry {
+  int freq; 
   int len;
+  int index;
   char *request;
   char *content;
+  struct cache_entry_t* next; 
 } cache_entry_t;
 
 
 //globals
 static volatile sig_atomic_t doneFlag = 0;
 request_t queue [MAX_queue_len];
-int queueIndex = 0;
-int retrievalIndex = 0;
+int insert_idx = 0;
+int retrieve_idx = 0;
 FILE* logfile;
 cache_entry_t* cache; 
 int cache_size = 0; 
+pthread_mutex_t lock; 
 
 /* ******************** Dynamic Pool Code  [Extra Credit A] **********************/
 // Extra Credit: This function implements the policy to change the worker thread pool dynamically
@@ -66,10 +70,15 @@ int getCacheIndex(char *request){
   return -1;
 }
 
+void deleteCacheEntry(cache_entry_t* toDelete){
+}
+
 // Function to add the request and its file content into the cache
 void addIntoCache(char *mybuf, char *memory , int memory_size){
   // It should add the request at an index according to the cache replacement policy
   // Make sure to allocate/free memory when adding or replacing cache entries
+
+  return;
 }
 
 // clear the memory allocated to the cache
@@ -108,18 +117,16 @@ char* getContentType(char * mybuf) {
 
 // Function to open and read the file from the disk into the memory
 // Add necessary arguments as needed
-int readFromDisk(char* file, char* contents) {
+int readFromDisk(char* file, char* contents, size_t size) {
   // Open and read the contents of file given the request
 
   int fd, bytes, totalbytes = 0;
-  char* path = getcwd(NULL, 100);
-  strcat(path, file);
-  if( (fd = open(path, O_RDONLY)) == -1){
+  if( (fd = open(file, O_RDONLY)) == -1){
     printf("File failed to open.\n");
     return -1;
   }
-  bytes = read(fd, contents, BUFF_SIZE*20);
 
+  bytes = read(fd, contents, size);
   return bytes;
 }
 
@@ -129,8 +136,8 @@ int readFromDisk(char* file, char* contents) {
 void * dispatch(void *arg) {
 
   while (1) {
-    // Accept client connection
-    sleep(1);
+    // Accept client connection 
+
     int fd = accept_connection();
     //printf("fd: %d\n", fd);
     if(fd < 0){
@@ -148,8 +155,8 @@ void * dispatch(void *arg) {
     request_t req; 
     req.fd = fd;
     req.request = filename;
-    queue[queueIndex] = req;
-    queueIndex++; 
+    queue[insert_idx] = req;
+    insert_idx++; 
    }
    return NULL;
 }
@@ -158,33 +165,41 @@ void * dispatch(void *arg) {
 
 // Function to retrieve the request from the queue, process it and then return a result to the client
 void * worker(void * arg) {
-  int num_requests = 1;
+  int num_requests = 0;
   while (1) {
     sleep(1);
 
-    if(retrievalIndex == queueIndex) {
-      //fprintf(fd, "Handled all requests\n");
+    if(retrieve_idx == insert_idx) {
+      //fprintf(logfile, "Handled all requests\n");
       continue;  //if we've handled all requests
     }
     
     // Get the request from the queue
-    request_t req = queue[retrievalIndex];
-    retrievalIndex++; num_requests++;
+
+    //set lock
+    request_t req = queue[retrieve_idx];
+    retrieve_idx++; 
+    num_requests++;
+    //unlock
 
     // Get the data from the disk or the cache (extra credit B)
 
-    char* contents = malloc(BUFF_SIZE * sizeof(char) * 20);
-    int numbytes = readFromDisk(req.request, contents);
+    struct stat st; 
+    char* path = getcwd(NULL, BUFF_SIZE);
+    strcat(path, req.request);
+    stat(path, &st);
+    char* contents = malloc(st.st_size);
+    int numbytes = readFromDisk(path, contents, st.st_size);
 
     // Log the request into the file and terminal
-    int* threadID = arg;
-    fprintf(logfile, "[%d][%d][%d][%s]", (*threadID), num_requests, req.fd, req.request);
 
-    char* error = malloc(BUFF_SIZE);
+    fprintf(logfile, "[%d][%d][%d][%s]", *(int*)arg, num_requests, req.fd, req.request);
     if(numbytes <= 0){
       char* error = malloc(BUFF_SIZE);
       return_error(req.fd, error);
       fprintf(logfile, "[%s]", error);
+      fprintf(logfile, "[MISS]\n");
+      return 0;
     } else {
       fprintf(logfile, "[%d]", numbytes);
     }
@@ -248,7 +263,7 @@ int main(int argc, char **argv) {
 
   // Open log file
 
-  logfile = fopen("web_server_log", "w");
+  logfile = fopen("webserver_log", "w");
   if(logfile == NULL){
     printf("Failed to open web_server_log\n.");
     return INVALID;
@@ -268,16 +283,19 @@ int main(int argc, char **argv) {
   init(port);
 
   // Create dispatcher and worker threads (all threads should be detachable)
-
+  int d_arg[MAX_THREADS];
   for(int n = 0; n < num_dispatcher; n++){
     pthread_t p;
+    d_arg[n] = n;
     // printf("Dispatcher #%d\n", n);
-    pthread_create(&p, NULL, dispatch, &n);
+    pthread_create(&p, NULL, dispatch, &d_arg[n]);
   }
+  int w_arg[MAX_THREADS];
   for(int n = 0; n < num_workers; n++){
     pthread_t p;
+    w_arg[n] = n;
     // printf("Worker #%d\n", n);
-    pthread_create(&p, NULL, worker, &n);
+    pthread_create(&p, NULL, worker, &w_arg[n]);
   }
 
   // Create dynamic pool manager thread (extra credit A)
@@ -285,11 +303,11 @@ int main(int argc, char **argv) {
   if(dynamic_flag);
 
   // Terminate server gracefully
-  while(!doneFlag);
+  while(!doneFlag) sleep(1);
 
   // Print the number of pending requests in the request queue
 
-  printf("\nNumber of pending requests in queue: %d\n", queueIndex - retrievalIndex);
+  printf("\nNumber of pending requests in queue: %d\n", insert_idx - retrieve_idx);
 
   // close log file
 
