@@ -15,7 +15,7 @@
 #include <signal.h>
 
 #define MAX_THREADS 100
-#define MAX_queue_len 100
+#define MAX_QUEUE_LEN 100
 #define MAX_CE 100
 #define INVALID -1
 #define BUFF_SIZE 1024
@@ -43,14 +43,18 @@ typedef struct cache_entry {
 
 //globals
 static volatile sig_atomic_t doneFlag = 0;
-request_t queue [MAX_queue_len];
+request_t queue [MAX_QUEUE_LEN];
 int insert_idx = 0;
 int retrieve_idx = 0;
+int items_in_queue = 0;
+static int queue_length =1;
 FILE* logfile;
 cache_entry_t* cache; 
 int cache_size = 0; 
 pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t queue_not_empty = PTHREAD_COND_INITIALIZER;
+pthread_cond_t queue_not_full = PTHREAD_COND_INITIALIZER;
 
 /* ******************** Dynamic Pool Code  [Extra Credit A] **********************/
 // Extra Credit: This function implements the policy to change the worker thread pool dynamically
@@ -134,9 +138,11 @@ int readFromDisk(char* file, char* contents, size_t size) {
 /**********************************************************************************/
 
 // Function to receive the request from the client and add to the queue
+
 void * dispatch(void *arg) {
 
   while (1) {
+  
     // Accept client connection 
 
     int fd = accept_connection();
@@ -155,13 +161,30 @@ void * dispatch(void *arg) {
     // Set lock
     pthread_mutex_lock(&queue_lock);
     
+    // wait until queue is not full
+    while(items_in_queue == queue_length){
+    	pthread_cond_wait(&queue_not_full, &queue_lock);
+    }
+    
+    items_in_queue++;
+    
+    if(insert_idx >= queue_length){
+    	insert_idx = 0;
+    }
+    
     // Add the request into the queue
-
+    
     request_t req; 
     req.fd = fd;
     req.request = filename;
     queue[insert_idx] = req;
-    insert_idx++; 
+    insert_idx++;
+    
+    
+    
+    //signal that queue is not empty
+    
+    pthread_cond_signal(&queue_not_empty);
     
     //Unlock
     pthread_mutex_unlock(&queue_lock);
@@ -177,20 +200,31 @@ void * worker(void * arg) {
   while (1) {
     sleep(1);
 
-    if(retrieve_idx == insert_idx) {
-      //fprintf(logfile, "Handled all requests\n");
-      continue;  //if we've handled all requests
-    }
-
     //set lock
     
     pthread_mutex_lock(&queue_lock);
     
-    // Get the request from the queue
+    // wait until queue is not empty
     
+    while(items_in_queue == 0){
+    	pthread_cond_wait(&queue_not_empty, &queue_lock);
+    }
+    
+    items_in_queue--;
+    
+    if(retrieve_idx >= queue_length){
+    	retrieve_idx = 0;
+    }
+    
+    // Get the request from the queue
     request_t req = queue[retrieve_idx];
-    retrieve_idx++; 
+    retrieve_idx++;
+    
     num_requests++;
+    
+    // signal that queue is not full
+    
+    pthread_cond_signal(&queue_not_full);
     
     //unlock
     
@@ -229,7 +263,9 @@ void * worker(void * arg) {
     // return the result
 
     char* content_type = getContentType(req.request);
+   
     return_result(req.fd, content_type, contents, numbytes);
+    
     free(content_type);
     
   }
@@ -257,7 +293,7 @@ int main(int argc, char **argv) {
   int num_dispatcher = atoi(argv[3]);
   int num_workers = atoi(argv[4]);
   bool dynamic_flag = atoi(argv[5]);
-  int queue_length = atoi(argv[6]);
+  queue_length = atoi(argv[6]);
   int cache_size = atoi(argv[7]);
   //printf("Port: %d\nPath: %s\nNum dispatchers: %d\nNum workers: %d\nDynamic Flag: %d\nQueue Length: %d\nCache Size: %d\n", port, path, num_dispatcher, num_workers, dynamic_flag, queue_length, cache_size);
 
@@ -321,7 +357,13 @@ int main(int argc, char **argv) {
 
   // Create dynamic pool manager thread (extra credit A)
 
-  if(dynamic_flag);
+  if(dynamic_flag){
+  	//create thread
+  	pthread_t p;
+  	
+  
+  }
+  
 
   // Terminate server gracefully
   while(!doneFlag) sleep(1);
