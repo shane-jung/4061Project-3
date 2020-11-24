@@ -46,7 +46,7 @@ static volatile sig_atomic_t doneFlag = 0;
 request_t queue [MAX_QUEUE_LEN];
 int insert_idx = 0;
 int retrieve_idx = 0;
-int items_in_queue = 0;
+int items_in_queue = 0;	//num of items in queue that haven't yet been retrieved by worker
 static int queue_length =1;
 FILE* logfile;
 cache_entry_t* cache; 
@@ -159,9 +159,14 @@ void * dispatch(void *arg) {
     }
     
     // Set lock
-    pthread_mutex_lock(&queue_lock);
+    
+    if(pthread_mutex_lock(&queue_lock)){
+    	printf("Error obtaining lock \n");
+    	continue;
+    }
     
     // wait until queue is not full
+    
     while(items_in_queue == queue_length){
     	pthread_cond_wait(&queue_not_full, &queue_lock);
     }
@@ -187,7 +192,12 @@ void * dispatch(void *arg) {
     pthread_cond_signal(&queue_not_empty);
     
     //Unlock
-    pthread_mutex_unlock(&queue_lock);
+    
+    if(pthread_mutex_unlock(&queue_lock)){
+    	printf("error releasing lock \n");
+    	continue;
+    }
+    
    }
    return NULL;
 }
@@ -202,7 +212,10 @@ void * worker(void * arg) {
 
     //set lock
     
-    pthread_mutex_lock(&queue_lock);
+    if(pthread_mutex_lock(&queue_lock)){
+    	printf("error obtaining lock \n");
+    	continue;
+    }
     
     // wait until queue is not empty
     
@@ -228,7 +241,10 @@ void * worker(void * arg) {
     
     //unlock
     
-    pthread_mutex_unlock(&queue_lock);
+    if(pthread_mutex_unlock(&queue_lock)){
+    	printf("error releasing lock \n");
+    	continue;
+    }
 
     // Get the data from the disk or the cache (extra credit B)
 
@@ -240,7 +256,10 @@ void * worker(void * arg) {
     int numbytes = readFromDisk(path, contents, st.st_size);
     
     //set lock
-    pthread_mutex_lock(&log_lock);
+    if(pthread_mutex_lock(&log_lock)){
+    	printf("error obtaining lock \n");
+    	continue;
+    }
 
     // Log the request into the file and terminal
 
@@ -258,7 +277,11 @@ void * worker(void * arg) {
     
     
     //Unlock
-    pthread_mutex_unlock(&log_lock);
+    
+    if(pthread_mutex_unlock(&log_lock)){
+    	printf("error releasing lock \n");
+    	continue;
+    }
 
     // return the result
 
@@ -345,21 +368,24 @@ int main(int argc, char **argv) {
     pthread_t p;
     d_arg[n] = n;
     // printf("Dispatcher #%d\n", n);
-    pthread_create(&p, NULL, dispatch, &d_arg[n]);
+    if(pthread_create(&p, NULL, dispatch, &d_arg[n])){
+    	printf("error creating thread \n");
+    }
   }
   int w_arg[MAX_THREADS];
   for(int n = 0; n < num_workers; n++){
     pthread_t p;
     w_arg[n] = n;
     // printf("Worker #%d\n", n);
-    pthread_create(&p, NULL, worker, &w_arg[n]);
+    if(pthread_create(&p, NULL, worker, &w_arg[n])){
+    	printf("error creating thread \n");
+    }
   }
 
   // Create dynamic pool manager thread (extra credit A)
 
   if(dynamic_flag){
   	//create thread
-  	pthread_t p;
   	
   
   }
