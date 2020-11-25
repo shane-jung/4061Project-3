@@ -2,6 +2,9 @@
 * Name: Kieran Arora, Shane Jung, Clara Lemaitre
 * X500: arora119, lemai014, jung0237 */
 
+
+NOTE: for some reason "failed to open stream" is output to the console, even though the web server works properly and the output/logs look right. We were not able to figure this issue out.
+
 How to compile and run program: 
 Use make to compile. 
 Run with ./web_server port path num_dispatch num_workers dynamic_flag qlen cache_entries 
@@ -20,4 +23,6 @@ Team member contributions:
 Shane: Main method, logging, initial dispatch and worker thread mechanisms
 Kieran: Synchronization, dynamic worker pool, documentation
 Clara: Caching, error handling
+
+
 
