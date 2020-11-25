@@ -125,8 +125,13 @@ void addIntoCache(char *mybuf, char *memory , int memory_size){
 
 // clear the memory allocated to the cache
 void deleteCache(){
-  for(int i = 0; i < cache_size; i++){
+  int i = 0;
+  for(; i < cache_size; i++){
     deleteCacheEntry(cache[i]);
+    free(cache[i]);
+  }
+  for( ;i < max_cache_size; i++){
+    free(cache[i]);
   }
   free(cache);
 }
@@ -136,6 +141,9 @@ void deleteCache(){
 void initCache(){
   // Allocating memory and initializing the cache array
   cache = (cache_entry_t**) malloc(sizeof(cache_entry_t*) * max_cache_size);
+  for(int i = 0; i < max_cache_size; i++){
+    cache[i] = (cache_entry_t *) malloc(sizeof(cache_entry_t*));
+  }
 }
 
 // utility to help visualize cache
@@ -334,7 +342,9 @@ void * worker(void * arg) {
       stat(path, &st);
       contents = malloc(st.st_size);
       numbytes = readFromDisk(path, contents, st.st_size);
-      addIntoCache(path, contents, numbytes);
+      if(max_cache_size > 0){
+        addIntoCache(path, contents, numbytes);
+      }
     } else{
       cacheHit = true;
       cache_entry_t* data = cache[cache_index];
