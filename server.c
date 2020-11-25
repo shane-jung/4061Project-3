@@ -125,7 +125,7 @@ void addIntoCache(char *mybuf, char *memory , int memory_size){
 
 // clear the memory allocated to the cache
 void deleteCache(){
-  for(int i = 0; i < max_cache_size; i++){
+  for(int i = 0; i < cache_size; i++){
     deleteCacheEntry(cache[i]);
   }
   free(cache);
@@ -136,9 +136,6 @@ void deleteCache(){
 void initCache(){
   // Allocating memory and initializing the cache array
   cache = (cache_entry_t**) malloc(sizeof(cache_entry_t*) * max_cache_size);
-  for(int i = 0; i < max_cache_size; i++){
-    cache[i] = (cache_entry_t *) malloc(sizeof(cache_entry_t*));
-  }
 }
 
 // utility to help visualize cache
