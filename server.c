@@ -61,6 +61,7 @@ int max_cache_size;
 
 pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t cache_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t queue_not_empty = PTHREAD_COND_INITIALIZER;
 pthread_cond_t queue_not_full = PTHREAD_COND_INITIALIZER;
 
@@ -331,6 +332,11 @@ void * worker(void * arg) {
 
     // Get the data from the disk or the cache (extra credit B)
 
+	//set lock
+	if(pthread_mutex_lock(&cache_lock)){
+		printf("error obtaining lock \n");
+		continue;
+	}
     
     char* path = getcwd(NULL, BUFF_SIZE);
     strcat(path, req.request);
@@ -352,6 +358,12 @@ void * worker(void * arg) {
       contents = malloc(numbytes);
       contents = data -> content;
     }
+    
+     if(pthread_mutex_unlock(&cache_lock)){
+    	printf("error releasing lock \n");
+    	continue;
+    }
+    
     
     //set lock
     if(pthread_mutex_lock(&log_lock)){
