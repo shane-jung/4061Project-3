@@ -44,34 +44,31 @@ typedef struct cache_entry {
 //globals
 static volatile sig_atomic_t doneFlag = 0;
 request_t queue [MAX_QUEUE_LEN];
+static int num_dispatcher = 0;
+static int num_workers = 0;
+int d_arg [MAX_THREADS];
+int w_arg [MAX_THREADS];
 int insert_idx = 0;
 int retrieve_idx = 0;
 int items_in_queue = 0;	//num of items in queue that haven't yet been retrieved by worker
 static int queue_length =1;
 FILE* logfile;
 cache_entry_t* cache; 
-int cache_size = 0; 
 pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t queue_not_empty = PTHREAD_COND_INITIALIZER;
 pthread_cond_t queue_not_full = PTHREAD_COND_INITIALIZER;
 
-/* ******************** Dynamic Pool Code  [Extra Credit A] **********************/
-// Extra Credit: This function implements the policy to change the worker thread pool dynamically
-// depending on the number of requests
-void * dynamic_pool_size_update(void *arg) {
-  while(1) {
-    // Run at regular intervals
-    // Increase / decrease dynamically based on your policy
-  }
-}
-/**********************************************************************************/
 
-/* ************************ Cache Code [Extra Credit B] **************************/
+// moved the section for Extra Credit A farther down.
+
+
+/* ************************ Cache Code [Extra Credit B, did not implement] **************************/
 
 // Function to check whether the given request is present in cache
 int getCacheIndex(char *request){
   /// return the index if the request is present in the cache
+  
   return -1;
 }
 
@@ -125,7 +122,7 @@ char* getContentType(char * mybuf) {
 int readFromDisk(char* file, char* contents, size_t size) {
   // Open and read the contents of file given the request
 
-  int fd, bytes, totalbytes = 0;
+  int fd, bytes = 0;
   if( (fd = open(file, O_RDONLY)) == -1){
     printf("File failed to open.\n");
     return -1;
@@ -146,7 +143,6 @@ void * dispatch(void *arg) {
     // Accept client connection 
 
     int fd = accept_connection();
-    //printf("fd: %d\n", fd);
     if(fd < 0){
       continue;
     }
@@ -168,7 +164,9 @@ void * dispatch(void *arg) {
     // wait until queue is not full
     
     while(items_in_queue == queue_length){
-    	pthread_cond_wait(&queue_not_full, &queue_lock);
+    	if(pthread_cond_wait(&queue_not_full, &queue_lock)){
+    		continue;
+    	}
     }
     
     items_in_queue++;
@@ -189,7 +187,9 @@ void * dispatch(void *arg) {
     
     //signal that queue is not empty
     
-    pthread_cond_signal(&queue_not_empty);
+    if(pthread_cond_signal(&queue_not_empty)){
+    	continue;
+    }
     
     //Unlock
     
@@ -217,10 +217,31 @@ void * worker(void * arg) {
     	continue;
     }
     
+    
+    
     // wait until queue is not empty
     
-    while(items_in_queue == 0){
-    	pthread_cond_wait(&queue_not_empty, &queue_lock);
+    while(items_in_queue == 0 || *(int*)arg >= num_workers){
+    	// delete thread if mandated by dynamic worker thread pool
+    
+   	 if(*(int*)arg >= num_workers){
+    		//printf("deleting thread %d \n", *(int*)arg);
+    		
+    		//release lock
+    		
+    		 if(pthread_mutex_unlock(&queue_lock)){
+    			printf("error releasing lock \n");
+    			continue;
+    		 }
+
+    		//exit thread
+    		
+    		pthread_exit(0);
+    	}
+    	if(pthread_cond_wait(&queue_not_empty, &queue_lock)){
+    		continue;
+    	}
+    	
     }
     
     items_in_queue--;
@@ -237,7 +258,9 @@ void * worker(void * arg) {
     
     // signal that queue is not full
     
-    pthread_cond_signal(&queue_not_full);
+    if(pthread_cond_signal(&queue_not_full)){
+    	continue;
+    }
     
     //unlock
     
@@ -294,6 +317,39 @@ void * worker(void * arg) {
   }
   return NULL;
 }
+
+
+/* ******************** Dynamic Pool Code  [Extra Credit A] **********************/
+// Extra Credit: This function implements the policy to change the worker thread pool dynamically
+// depending on the number of requests
+void * dynamic_pool_size_update(void *arg) {
+  while(1) {
+    // Run at regular intervals
+    sleep(2);
+    
+    // Increase / decrease dynamically based on your policy
+    
+    if(items_in_queue > num_workers){
+    	printf("creating %d new workers \n", items_in_queue-num_workers);
+    	for(int n = num_workers; n < items_in_queue; n++){
+    		pthread_t p;
+    		w_arg[n] = n;
+    		num_workers++;
+    		if(pthread_create(&p, NULL, worker, &w_arg[n])){
+    			printf("error creating thread \n");
+    		}
+  	}
+    }
+    
+    else if(items_in_queue + 1 < num_workers){
+    	printf("deleting %d workers \n", num_workers - items_in_queue - 1);
+    	num_workers = items_in_queue + 1;
+    	//printf("items in queue: %d, num workers: %d \n", items_in_queue, num_workers);
+    }
+    
+  }
+}
+/**********************************************************************************/
 /**********************************************************************************/
 
 void gracefulTerminate(int signal){
@@ -313,8 +369,8 @@ int main(int argc, char **argv) {
   
   int port = atoi(argv[1]);
   char* path = argv[2];
-  int num_dispatcher = atoi(argv[3]);
-  int num_workers = atoi(argv[4]);
+  num_dispatcher = atoi(argv[3]);
+  num_workers = atoi(argv[4]);
   bool dynamic_flag = atoi(argv[5]);
   queue_length = atoi(argv[6]);
   int cache_size = atoi(argv[7]);
@@ -329,6 +385,11 @@ int main(int argc, char **argv) {
   if(queue_length <= 0){
     printf("Queue length must be greater than 0.\n");
     return INVALID; 
+  }
+  
+  if(num_dispatcher > MAX_THREADS || num_dispatcher < 0 || num_workers > MAX_THREADS || num_workers < 0){
+  	printf("Number of dispatcher and workers must be between %d and 100. \n", MAX_THREADS);
+  	return INVALID;
   }
 
   // Change SIGINT action for grace termination
@@ -363,7 +424,6 @@ int main(int argc, char **argv) {
   init(port);
 
   // Create dispatcher and worker threads (all threads should be detachable)
-  int d_arg[MAX_THREADS];
   for(int n = 0; n < num_dispatcher; n++){
     pthread_t p;
     d_arg[n] = n;
@@ -372,7 +432,6 @@ int main(int argc, char **argv) {
     	printf("error creating thread \n");
     }
   }
-  int w_arg[MAX_THREADS];
   for(int n = 0; n < num_workers; n++){
     pthread_t p;
     w_arg[n] = n;
@@ -386,8 +445,10 @@ int main(int argc, char **argv) {
 
   if(dynamic_flag){
   	//create thread
-  	
-  
+  	pthread_t p;
+  	if(pthread_create(&p, NULL, dynamic_pool_size_update, (void *)MAX_THREADS)){
+  		printf("error creating thread \n");
+  	}
   }
   
 
