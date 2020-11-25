@@ -19,6 +19,7 @@
 #define MAX_CE 100
 #define INVALID -1
 #define BUFF_SIZE 1024
+#define MAX_REQUEST_LEN 1024
 #define PERMS 0666
 
 /*
@@ -53,7 +54,11 @@ int retrieve_idx = 0;
 int items_in_queue = 0;	//num of items in queue that haven't yet been retrieved by worker
 static int queue_length =1;
 FILE* logfile;
-cache_entry_t* cache; 
+cache_entry_t** cache; 
+int cache_size = 0; 
+int c_idx = 0;
+int max_cache_size;
+
 pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t queue_not_empty = PTHREAD_COND_INITIALIZER;
@@ -68,32 +73,82 @@ pthread_cond_t queue_not_full = PTHREAD_COND_INITIALIZER;
 // Function to check whether the given request is present in cache
 int getCacheIndex(char *request){
   /// return the index if the request is present in the cache
-  
+  for(int i = 0; i < cache_size; i++){
+    if(!strcmp(cache[i]->request, request)) {
+      cache[i]->freq++;
+      return i;
+    }
+  }
   return -1;
 }
 
+int getMinFreqInCache(){
+  int min = cache[0]->freq;
+  int minIndex = 0;
+  for(int i = 1; i < max_cache_size; i++){
+    if(cache[i]->freq < min){
+      min = cache[i]->freq;
+      minIndex = i;
+    }
+  }
+  return minIndex;
+}
+
 void deleteCacheEntry(cache_entry_t* toDelete){
+  free(toDelete->content);
+  free(toDelete->request);
 }
 
 // Function to add the request and its file content into the cache
+// It should add the request at an index according to the cache replacement policy
+// Make sure to allocate/free memory when adding or replacing cache entries
 void addIntoCache(char *mybuf, char *memory , int memory_size){
-  // It should add the request at an index according to the cache replacement policy
-  // Make sure to allocate/free memory when adding or replacing cache entries
-
+  int index; 
+  if(cache_size < max_cache_size){  //if cache is not full yet, just add it to the end
+    index = c_idx;
+    c_idx++;
+    cache_size++;
+  } else { //otherwise, we try to find the request with min frequency to replace 
+    index = getMinFreqInCache();
+    deleteCacheEntry(cache[index]);
+  }
+  cache_entry_t* entry = malloc(sizeof(cache_entry_t));
+  entry -> len     = memory_size; 
+  entry -> freq    = 1;
+  entry -> request = malloc(MAX_REQUEST_LEN);
+  entry -> request = mybuf;
+  entry -> content = malloc(memory_size);
+  entry -> content = memory;
+  cache[index] = entry;
   return;
 }
 
 // clear the memory allocated to the cache
 void deleteCache(){
-  // De-allocate/free the cache memory
+  for(int i = 0; i < max_cache_size; i++){
+    deleteCacheEntry(cache[i]);
+  }
+  free(cache);
 }
 
 
 // Function to initialize the cache
 void initCache(){
   // Allocating memory and initializing the cache array
+  cache = (cache_entry_t**) malloc(sizeof(cache_entry_t*) * max_cache_size);
+  for(int i = 0; i < max_cache_size; i++){
+    cache[i] = (cache_entry_t *) malloc(sizeof(cache_entry_t*));
+  }
 }
 
+// utility to help visualize cache
+void printCache(){
+  printf("Cache Size: %d\nCache Max Size: %d\n", cache_size, max_cache_size);
+  for(int i = 0; i < cache_size; i++){
+    cache_entry_t* curr = cache[i];
+    printf("Entry %d | request: %s | freq: %d | len: %d\n", i+1, curr->request, curr->freq, curr-> len);
+  }
+}
 /**********************************************************************************/
 
 /* ************************************ Utilities ********************************/
@@ -271,12 +326,25 @@ void * worker(void * arg) {
 
     // Get the data from the disk or the cache (extra credit B)
 
-    struct stat st; 
+    
     char* path = getcwd(NULL, BUFF_SIZE);
     strcat(path, req.request);
-    stat(path, &st);
-    char* contents = malloc(st.st_size);
-    int numbytes = readFromDisk(path, contents, st.st_size);
+    int cache_index, numbytes;
+    char* contents;
+    bool cacheHit = false;
+    if((cache_index = getCacheIndex(path)) == -1){
+      struct stat st; 
+      stat(path, &st);
+      contents = malloc(st.st_size);
+      numbytes = readFromDisk(path, contents, st.st_size);
+      addIntoCache(path, contents, numbytes);
+    } else{
+      cacheHit = true;
+      cache_entry_t* data = cache[cache_index];
+      numbytes = data -> len;
+      contents = malloc(numbytes);
+      contents = data -> content;
+    }
     
     //set lock
     if(pthread_mutex_lock(&log_lock)){
@@ -285,16 +353,22 @@ void * worker(void * arg) {
     }
 
     // Log the request into the file and terminal
-
     fprintf(logfile, "[%d][%d][%d][%s]", *(int*)arg, num_requests, req.fd, req.request);
     if(numbytes <= 0){
       char* error = malloc(BUFF_SIZE);
-      return_error(req.fd, error);
-      fprintf(logfile, "[%s]", error);
-      fprintf(logfile, "[MISS]\n");
-      
+      if(return_error(req.fd, error)){
+        printf("FAILED RETURNING ERROR\n");
+      }
+      fprintf(logfile, "[%s]", "Requested file not found.");
     } else {
       fprintf(logfile, "[%d]", numbytes);
+      char* content_type = getContentType(req.request);
+      return_result(req.fd, content_type, contents, numbytes);
+      free(content_type);
+    }
+    if(cacheHit){
+      fprintf(logfile, "[HIT]\n");
+    } else {
       fprintf(logfile, "[MISS]\n");
     }
     
@@ -373,7 +447,7 @@ int main(int argc, char **argv) {
   num_workers = atoi(argv[4]);
   bool dynamic_flag = atoi(argv[5]);
   queue_length = atoi(argv[6]);
-  int cache_size = atoi(argv[7]);
+  max_cache_size = atoi(argv[7]);
   //printf("Port: %d\nPath: %s\nNum dispatchers: %d\nNum workers: %d\nDynamic Flag: %d\nQueue Length: %d\nCache Size: %d\n", port, path, num_dispatcher, num_workers, dynamic_flag, queue_length, cache_size);
 
   // Perform error checks on the input arguments
@@ -416,7 +490,7 @@ int main(int argc, char **argv) {
   // printf("%s\n", getcwd(NULL, 1000));
   
   // Initialize cache (extra credit B)
-  cache = NULL;
+  initCache();
   
 
   // Start the server
@@ -457,13 +531,15 @@ int main(int argc, char **argv) {
 
   // Print the number of pending requests in the request queue
 
-  printf("\nNumber of pending requests in queue: %d\n", insert_idx - retrieve_idx);
+  printf("Number of pending requests in queue: %d\n", insert_idx - retrieve_idx);
 
   // close log file
 
   fclose(logfile);
 
   // Remove cache (extra credit B)
+
+  deleteCache();
 
 
   return 0;
